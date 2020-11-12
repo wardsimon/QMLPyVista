@@ -11,7 +11,6 @@ import vtk
 
 class FboItem(QQuickFramebufferObject, BasePlotter):
     rendererInitialized = Signal()
-    render_signal = Signal()
 
     def __init__(self, *args, **kwargs):
         qDebug('FboItem::__init__')
@@ -48,8 +47,6 @@ class FboItem(QQuickFramebufferObject, BasePlotter):
 
         self.setMirrorVertically(True)  # QtQuick and OpenGL have opposite Y-Axis directions
         self.setAcceptedMouseButtons(Qt.RightButton | Qt.LeftButton)
-
-        self.render_signal.connect(self._render)
 
 
     def createRenderer(self):
