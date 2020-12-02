@@ -12,6 +12,60 @@ from QMLPyVista.QVTKFrameBufferObjectItem import FboItem
 
 import sys
 
+import vtk
+
+colors = vtk.vtkNamedColors()
+
+
+class MouseInteractorHighLightActor(vtk.vtkInteractorStyleTrackballCamera):
+
+    def __init__(self, parent=None, ren_win=None, ren=None):
+        self.AddObserver("LeftButtonPressEvent", self.leftButtonPressEvent)
+        self.ren_win = ren_win
+        self.renderers = ren
+        self.LastPickedActor = None
+        self.LastPickedProperty = vtk.vtkProperty()
+
+    def leftButtonPressEvent(self, obj, event):
+        clickPos = self.GetInteractor().GetEventPosition()
+        window_size = [0, 0]
+        if self.ren_win is not None:
+            window_size = self.ren_win.GetSize()
+
+        clickPos = [clickPos[0], window_size[1] + clickPos[1]]
+
+        picker = vtk.vtkPropPicker()
+        # renderer = self.GetDefaultRenderer()
+        # print(renderer)
+        picked_actor = None
+        for renderer in self.renderers:
+            print(renderer)
+            picker.Pick(clickPos[0], clickPos[1], 0, renderer)
+            picked_actor = picker.GetActor()
+            if picked_actor:
+                break
+        # get the new
+        self.NewPickedActor = picked_actor
+        print(self.NewPickedActor)
+        # If something was selected
+        if self.NewPickedActor:
+            # If we picked something before, reset its property
+            if self.LastPickedActor:
+                self.LastPickedActor.GetProperty().DeepCopy(self.LastPickedProperty)
+
+            # Save the property of the picked actor so that we can
+            # restore it next time
+            self.LastPickedProperty.DeepCopy(self.NewPickedActor.GetProperty())
+            # Highlight the picked actor by changing its properties
+            self.NewPickedActor.GetProperty().SetColor(colors.GetColor3d('Red'))
+            self.NewPickedActor.GetProperty().SetDiffuse(1.0)
+            self.NewPickedActor.GetProperty().SetSpecular(0.0)
+
+            # save the last picked actor
+            self.LastPickedActor = self.NewPickedActor
+
+        self.OnLeftButtonDown()
+        return
 
 def defaultFormat(stereo_capable):
     """ Po prostu skopiowałem to z https://github.com/Kitware/VTK/blob/master/GUISupport/Qt/QVTKRenderWindowAdapter.cxx
@@ -109,7 +163,7 @@ class MyExamples:
         # Close movie and delete object
         # plotter.close()
 
-    def sphere(self, fbo):
+    def sphere(self, fbo: FboItem):
         import vtk
         polyDataSource = vtk.vtkSphereSource()
         polyDataSource.SetRadius(.1)
@@ -121,9 +175,13 @@ class MyExamples:
         mapper.SetInputConnection(polyDataSource.GetOutputPort())
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
-        actor.GetProperty().SetColor([1, 0, 0])
+        actor.GetProperty().SetColor([0, 0, 1])
         fbo.add_actor(actor)
+        fbo.set_background([0, 255, 0])
         fbo.update()
+        style = MouseInteractorHighLightActor(ren_win=fbo.ren_win, ren=fbo.renderers)
+        fbo._style_class = style
+        fbo.update_style()
 
     def plane(self, fbo):
         from pyvista import examples
@@ -183,26 +241,62 @@ class MyExamples:
 
         fbo.update()
 
-    def cow(self, fbo):
+    def simple_cow(self, fbo):
         from pyvista import examples
+
         # download mesh
         mesh = examples.download_cow()
-
         decimated = mesh.decimate_boundary(target_reduction=0.75)
 
         fbo.set_subplots((1, 2))
         fbo.subplot(0, 0)
-        fbo.add_text("Original mesh", font_size=24)
-        fbo.add_mesh(mesh, show_edges=True, color=True)
+        fbo.add_text("Original mesh", font_size=24, color='black')
+        fbo.add_mesh(mesh, show_edges=True, color='brown')
         fbo.subplot(0, 1)
-        fbo.add_text("Decimated version", font_size=24)
-        fbo.add_mesh(decimated, color=True, show_edges=True)
+        fbo.add_text("Decimated version", font_size=24, color='black')
+        fbo.add_mesh(decimated, show_edges=True, color=True)
 
         fbo.link_views()  # link all the views
         # Set a camera position to all linked views
         fbo.camera_position = [(15, 5, 0), (0, 0, 0), (0, 1, 0)]
-
+        fbo.set_background('red')
         fbo.update()
+
+        style = MouseInteractorHighLightActor(ren_win=fbo.ren_win, ren=fbo.renderers)
+        # style.SetDefaultRenderer(fbo.renderer)
+        fbo._style_class = style
+        fbo.update_style()
+
+        image_data = fbo.image
+        print(image_data)
+
+
+    def cow(self, fbo):
+        from pyvista import examples
+
+        # download mesh
+        mesh = examples.download_cow()
+        decimated = mesh.decimate_boundary(target_reduction=0.75)
+
+        fbo.set_subplots((1, 2))
+        fbo.subplot(0, 0)
+        fbo.add_text("Original mesh", font_size=24, color='black')
+        fbo.add_mesh(mesh, show_edges=True, color='brown')
+        fbo.subplot(0, 1)
+        fbo.add_text("Decimated version", font_size=24, color='black')
+        fbo.add_mesh(decimated, show_edges=True, color=True)
+
+        fbo.link_views()  # link all the views
+        # Set a camera position to all linked views
+        fbo.camera_position = [(15, 5, 0), (0, 0, 0), (0, 1, 0)]
+        fbo.set_background('red')
+        fbo.update()
+
+        style = MouseInteractorHighLightActor(ren_win=fbo.ren_win, ren=fbo.renderers)
+        # style.SetDefaultRenderer(fbo.renderer)
+        fbo._style_class = style
+        fbo.update_style()
+
         fbo.open_gif("linked.gif")
 
         # Update camera and write a frame for each updated position
@@ -213,7 +307,7 @@ class MyExamples:
                 (0, 0, 0),
                 (0, 1, 0),
             ]
-            fbo.update()
+            # fbo.update()
             fbo.write_frame()
 
 
@@ -226,7 +320,7 @@ class canvasHandler(QObject):
 
     @Slot()
     def plot_example(self):
-        self.examples.cow(self.fbo)
+        self.examples.simple_cow(self.fbo)
 
     @Slot(int, int, int)
     def mousePressEvent(self, button: int, screenX: int, screenY: int):

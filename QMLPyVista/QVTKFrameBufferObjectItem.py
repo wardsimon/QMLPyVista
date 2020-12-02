@@ -1,10 +1,12 @@
+import weakref
+
 from PySide2.QtCore import QObject, QUrl, qDebug, qCritical, QEvent, QPointF, Qt, Signal
 from PySide2.QtGui import QColor, QMouseEvent, QWheelEvent
 from PySide2.QtQuick import QQuickFramebufferObject
 
 from QMLPyVista.QVTKFramebufferObjectRenderer import FboRenderer
-from pyvista import BasePlotter, np
-from functools import wraps
+from pyvista import BasePlotter, np, try_callback
+from functools import wraps, partial
 from typing import Any
 import vtk
 
@@ -32,10 +34,7 @@ class FboItem(QQuickFramebufferObject, BasePlotter):
         self.iren.EnableRenderOff()
         self.ren_win.SetInteractor(self.iren)
 
-        style = vtk.vtkInteractorStyleTrackballCamera()
-        # style.SetDefaultRenderer(self._renderer)
-        style.SetMotionFactor(10.0)
-        self.iren.SetInteractorStyle(style)
+        self.update_style()
 
         self.__m_lastMouseLeftButton: QMouseEvent = QMouseEvent(QEvent.Type.None_, QPointF(0, 0), Qt.NoButton,
                                                                 Qt.NoButton, Qt.NoModifier)
@@ -47,7 +46,6 @@ class FboItem(QQuickFramebufferObject, BasePlotter):
 
         self.setMirrorVertically(True)  # QtQuick and OpenGL have opposite Y-Axis directions
         self.setAcceptedMouseButtons(Qt.RightButton | Qt.LeftButton)
-
 
     def createRenderer(self):
         qDebug('FboItem::createRenderer')
@@ -95,6 +93,11 @@ class FboItem(QQuickFramebufferObject, BasePlotter):
                     self._render_idxs[row, col] = self._render_idxs[self.groups[group, 0], self.groups[group, 1]]
                 idx += 1
         self.renderers = renderers
+        # create a shadow renderer that lives on top of all others
+        qDebug('FboItem::shadowRenderer')
+        self._shadow_renderer = self._vtkFboRenderer.create_renderer(**self._opts)
+        self._shadow_renderer.SetViewport(0, 0, 1, 1)
+        self._shadow_renderer.SetDraw(False)
         self.rendererInitialized.emit()
         return self._vtkFboRenderer
 
@@ -253,6 +256,18 @@ class FboItem(QQuickFramebufferObject, BasePlotter):
         clone.accepted = False
         return clone
 
+    def update_style(self):
+        """Update the camera interactor style."""
+        if self._style_class is None:
+            # We need an actually custom style to handle button up events
+            self._style_class = _style_factory(self._style)(self)
+        return self.iren.SetInteractorStyle(self._style_class)
+
+    @property
+    def image(self):
+        return self._vtkFboRenderer.image()
+
+
     # @property
     # def image(self):
     #     """Return an image array of current render window.
@@ -278,3 +293,52 @@ class FboItem(QQuickFramebufferObject, BasePlotter):
     #         return data
     #     else:  # ignore alpha channel
     #         return data[:, :, :-1]
+
+def _style_factory(klass):
+    """Create a subclass with capturing ability, return it."""
+    # We have to use a custom subclass for this because the default ones
+    # swallow the release events
+    # http://vtk.1045678.n5.nabble.com/Mouse-button-release-event-is-still-broken-in-VTK-6-0-0-td5724762.html  # noqa
+
+    class CustomStyle(getattr(vtk, 'vtkInteractorStyle' + klass)):
+
+        def __init__(self, parent):
+            super().__init__()
+            self._parent = weakref.ref(parent)
+            self.AddObserver(
+                "LeftButtonPressEvent",
+                partial(try_callback, self._press))
+            self.AddObserver(
+                "LeftButtonReleaseEvent",
+                partial(try_callback, self._release))
+
+        def _press(self, obj, event):
+            # Figure out which renderer has the event and disable the
+            # others
+            super().OnLeftButtonDown()
+            parent = self._parent()
+            if len(parent.renderers) > 0:
+                click_pos = parent.iren.GetEventPosition()
+                rendererSize = parent.ren_win.GetSize()
+                # QT has y flipped, so it's -
+                n_rows = len(parent._render_idxs[0])
+                n_cols = len(parent._render_idxs)
+                click_pos = [n_cols*click_pos[0]/rendererSize[0], -n_rows*click_pos[1]/rendererSize[1]]
+                # These are the fractional co-ords. Now we need to set the correct one active....
+                # We put renderers in by column and then row [[row], [row]]
+                for idx, renderer in enumerate(parent.renderers):
+                    cx = np.mod(idx, n_rows) + 1
+                    cy = np.floor((idx + 1)/n_cols)
+                    xx = np.floor(click_pos[0]/cx).astype(int)
+                    yy = np.floor(click_pos[1]/cy).astype(int)
+                    interact = renderer.IsInViewport(xx, yy)
+                    renderer.SetInteractive(interact)
+
+        def _release(self, obj, event):
+            super().OnLeftButtonUp()
+            parent = self._parent()
+            if len(parent.renderers) > 1:
+                for renderer in parent.renderers:
+                    renderer.SetInteractive(True)
+
+    return CustomStyle
